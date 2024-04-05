@@ -23,7 +23,7 @@ class Car:
     fuel_type: str
     price_pln: str
     Raiting: int
-    image_url: str
+    image_url: str | None
 
     def create_embed(self) -> discord.Embed:
         embed = discord.Embed(
@@ -38,7 +38,8 @@ class Car:
         embed.add_field(name="Fuel type", value=self.fuel_type, inline=True)
         embed.add_field(name="Price", value=self.price_pln, inline=True)
         embed.set_footer(text="Car rating: " + str(round(self.Raiting, 4)))
-        embed.set_thumbnail(url=self.image_url)
+        if self.image_url is not None:
+            embed.set_thumbnail(url=self.image_url)
         return embed
 
     def __str__(self) -> str:
@@ -138,7 +139,6 @@ class OtomotoScraper:
         cars_parsed.sort(key=lambda x: x.Raiting, reverse=True)
         return cars_parsed
 
-    # audi--bmw--ford--mercedes-benz--suzuki--toyota--volkswagen--volvo
     def create_url(self, current_page: int) -> str:
         return f"{self.website}/{'--'.join(self.attributes["car_makes"])}/od-{self.attributes['min_year']}/katowice?search%5Bdist%5D=300{"&search%5Bfilter_enum_android_auto%5D=1" if self.attributes["android_auto"] else ""}&search%5Bprivate_business%5D=business&search&search%5Bfilter_enum_damaged%5D=0&search%5Bfilter_enum_fuel_type%5D%5B0%5D=petrol&search%5Bfilter_enum_fuel_type%5D%5B1%5D=hybrid&search%5Bfilter_float_engine_capacity%3Afrom%5D={self.attributes['engine_capacity']}&search%5Bfilter_float_mileage%3Ato%5D=130000&search%5Bfilter_float_price%3Ato%5D={self.attributes['max_price']}&search%5Badvanced_search_expanded%5D=false&page={current_page}"
 
@@ -157,8 +157,13 @@ class OtomotoScraper:
             "dd", {"data-parameter": "fuel_type"}).text
         price_pln = int(tag_element_content.find(
             "h3").text.replace(" ", ""))
-        img_url = tag_element_content.find(
-            "img", class_="e17vhtca4 ooa-2zzg2s").get('src')
+        img_url = None
+        try:
+            img_url = tag_element_content.find(
+                "img", class_="e17vhtca4 ooa-2zzg2s").get('src')
+        except:
+            logging.log(logging.WARNING, f"Failed to get image for car {link}")
+
         points: int = self.convert_attrs_to_score(year, mileage_km, price_pln)
 
         return {
@@ -226,56 +231,31 @@ class OtomotoScraper:
 
         return list_of_cars
 
+    def load_attrs(self, file: str):
+        with open(file=file, mode="r") as f:
+            self.attributes = json.load(f)
+
+    def save_attrs(self, file: str):
+        with open(file=file, mode="w") as f:
+            json.dump(self.attributes, f)
+
 # C:\Users\szkob\Desktop\HaveToDo\otomotonew
-
-
-def write_to_csv(cars: List[Car]) -> None:
-    with open("cars.csv", mode="w") as f:
-        fieldnames = [
-            "link",
-            "full_name",
-            "description",
-            "year",
-            "mileage_km",
-            "fuel_type",
-            "price_pln",
-        ]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for car in cars:
-            writer.writerow(asdict(car))
-
-
-def write_to_json(cars: List[Car]) -> None:
-    with open("cars.json", mode="w") as f:
-        json.dump([asdict(car) for car in cars], f)
-
-
-def scrape_otomoto() -> tuple[List[Car], Car]:
-    make = "polonez"
-    scraper = OtomotoScraper(make)
-    cars = scraper.scrape_pages(2)
-    write_to_json(cars)
-    # Get the car with the highest rating
-    best_car = max(cars, key=lambda car: car.Raiting)
-    print(best_car)
-    return cars, best_car
 
 
 class MyClient(discord.Client):
     async def on_ready(self):
+        self.max_pages = 100
         print(f'Logged on as {self.user}!')
+        self.scraper = OtomotoScraper()
+        self.scraper.load_attrs("settings.json")
         self.send_message.start()
-
-    async def on_message(self, message):
-        print(f'Message from {message.author}: {message.content}')
 
     # @tasks.loop(hours=12)
     @tasks.loop(seconds=10)
     async def send_message(self):
         channel = self.get_channel(get_channel())  # channel ID goes here
         await channel.typing()
-        cars = OtomotoScraper().autoscraper(10)
+        cars = self.scraper.autoscraper(self.max_pages)
         await channel.send("**Nowy ranking aut**")
         await channel.send(embed=cars[0].create_embed())
         await channel.send(embed=cars[1].create_embed())
@@ -283,6 +263,9 @@ class MyClient(discord.Client):
 
 
 if __name__ == "__main__":
+    FORMAT = '%(asctime)s %(message)s'
+    logging.basicConfig(filename=f'otomoto-{datetime.datetime.now().strftime("%d-%m-%Y")}.log',
+                        encoding='utf-8', level=logging.DEBUG, format=FORMAT, filemode='w')
     intents = discord.Intents.default()
     client = MyClient(intents=intents)
 
