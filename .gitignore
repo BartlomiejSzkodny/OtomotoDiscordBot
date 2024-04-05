@@ -160,4 +160,4 @@ cython_debug/
 #.idea/
 
 otomotoenv/*
-secrets.py
+secret_key.py
