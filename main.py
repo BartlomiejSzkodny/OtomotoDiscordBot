@@ -10,6 +10,7 @@ import datetime
 import discord
 from discord.ext import tasks
 from secret_key import get_token, get_channel
+import logging
 
 
 @dataclass
@@ -22,19 +23,42 @@ class Car:
     fuel_type: str
     price_pln: str
     Raiting: int
+    image_url: str
+
+    def create_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title=self.full_name,
+            description=self.description,
+            color=0x00ff00,
+            url=self.link,
+        )
+
+        embed.add_field(name="Year", value=self.year, inline=True)
+        embed.add_field(name="Mileage", value=self.mileage_km, inline=True)
+        embed.add_field(name="Fuel type", value=self.fuel_type, inline=True)
+        embed.add_field(name="Price", value=self.price_pln, inline=True)
+        embed.set_footer(text="Car rating: " + str(round(self.Raiting, 4)))
+        embed.set_thumbnail(url=self.image_url)
+        return embed
 
     def __str__(self) -> str:
-        return f"{self.full_name} - {self.price_pln} PLN - {self.Raiting} points link: {self.link}"
+        return f"**{self.full_name}** \nCena: {self.price_pln} PLN\nWynik: {round(self.Raiting, 4)}\nPrzebieg: {self.mileage_km} \nLink {self.link}"
 
     def __repr__(self) -> str:
-        return f"{self.full_name} - {self.price_pln} PLN - {self.Raiting} points link: {self.link}"
+        return self.__str__()
+
+    def __hash__(self) -> int:
+        return hash(hash(self.full_name) + hash(self.price_pln) + hash(self.mileage_km))
+
+    def __eq__(self, other) -> bool:
+        return self.full_name == other.full_name and self.price_pln == other.price_pln and self.mileage_km == other.mileage_km
 
 
 global_car_list = []
 
 
 class OtomotoScraper:
-    def __init__(self, car_make: str) -> None:
+    def __init__(self, attributes: dict | None = None) -> None:
         self.headers = {
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) "
             "AppleWebKit/537.11 (KHTML, like Gecko) "
@@ -45,28 +69,119 @@ class OtomotoScraper:
             "Accept-Language": "en-US,en;q=0.8",
             "Connection": "keep-alive",
         }
-        self.car_make = car_make
+        if attributes is not None:
+            self.attributes = attributes
 
         self.website = "https://www.otomoto.pl/osobowe"
 
         self.attributes = {
             "max_price": 60000,
             "max_odometer": 120000,
+            "min_year": 2015,
+            "engine_capacity": 1300,
+            "car_makes": [
+                "audi",
+                "bmw",
+                "ford",
+                "toyota",
+                "mitsubishi",
+                "volkswagen",
+                "volvo",
+                "suzuki",
+                "mercedes-benz",
+            ],
+            "android_auto": False,
+            # ""
         }
 
     # Prep for next stage
 
     def autoscraper(self, max_pages: int) -> List[Car]:
-        pass
+        logging.log(logging.INFO, "Starting to scrape pages")
+        # print(current_page)
+        num_pages = 1
 
-    @staticmethod
+        current_page_num = 0
+        cars_parsed = []
+        while (current_page_num < num_pages and current_page_num < max_pages):
+            current_page = self.create_url(current_page_num)
+            logging.log(logging.INFO, "")
+            response = requests.get(current_page, headers=self.headers).text
+            soupified_resp = BeautifulSoup(response, "html.parser")
+            offers_table = soupified_resp.find(class_="ooa-r53y0q ezh3mkl11")
+            print(current_page)
+            cars = offers_table.find_all(
+                "article", class_="ooa-yca59n emjt7sh0")
+            try:
+                num_pages = int(soupified_resp.find_all(  # IDK why this doesnt work
+                    "a", class_="ooa-g4wbjr eezyyk50", recursive=True)[-1].find("span").text)
+            except Exception as e:
+                logging.log(logging.WARNING,
+                            f"Failed to gather number of pages {e}")
+                num_pages = 1
+            for car in cars:
+                car_parsed = self.parse_tag_to_car(car)
+                car_obj = Car(
+                    car_parsed["link"],
+                    car_parsed["full_name"],
+                    car_parsed["desc"],
+                    car_parsed["year"],
+                    car_parsed["mileage_km"],
+                    car_parsed["fuel_type"],
+                    car_parsed["price_pln"],
+                    car_parsed["score"],
+                    car_parsed["image_url"]
+                )
+                cars_parsed.append(car_obj)
+            current_page_num += 1
+        cars_parsed = list(set(cars_parsed))
+        cars_parsed.sort(key=lambda x: x.Raiting, reverse=True)
+        return cars_parsed
+
+    # audi--bmw--ford--mercedes-benz--suzuki--toyota--volkswagen--volvo
     def create_url(self, current_page: int) -> str:
-        return f"{self.website}/audi--bmw--ford--mercedes-benz--suzuki--toyota--volkswagen--volvo/od-2015/katowice?search%5Bdist%5D=300&search%5Bfilter_enum_android_auto%5D=1&search%5Bprivate_business%5D=business&search&search%5Bfilter_enum_damaged%5D=0&search%5Bfilter_enum_fuel_type%5D%5B0%5D=petrol&search%5Bfilter_enum_fuel_type%5D%5B1%5D=hybrid&search%5Bfilter_float_engine_capacity%3Afrom%5D=1300&search%5Bfilter_float_mileage%3Ato%5D=130000&search%5Bfilter_float_price%3Ato%5D={self.attributes['max_price']}&search%5Badvanced_search_expanded%5D=false&page={i}"
-        pass
+        return f"{self.website}/{'--'.join(self.attributes["car_makes"])}/od-{self.attributes['min_year']}/katowice?search%5Bdist%5D=300{"&search%5Bfilter_enum_android_auto%5D=1" if self.attributes["android_auto"] else ""}&search%5Bprivate_business%5D=business&search&search%5Bfilter_enum_damaged%5D=0&search%5Bfilter_enum_fuel_type%5D%5B0%5D=petrol&search%5Bfilter_enum_fuel_type%5D%5B1%5D=hybrid&search%5Bfilter_float_engine_capacity%3Afrom%5D={self.attributes['engine_capacity']}&search%5Bfilter_float_mileage%3Ato%5D=130000&search%5Bfilter_float_price%3Ato%5D={self.attributes['max_price']}&search%5Badvanced_search_expanded%5D=false&page={current_page}"
 
-    @staticmethod
-    def parse_tag_to_car(tag_element_content):
-        pass
+    def parse_tag_to_car(self, tag_element_content):
+        link = tag_element_content.find(
+            "h1").find('a', href=True).get('href')
+        full_name = tag_element_content.find(
+            "h1").find('a', href=True).text
+        description = tag_element_content.find(
+            "p", class_="emjt7sh10 ooa-1tku07r er34gjf0").text
+        year = int(tag_element_content.find(
+            "dd", {"data-parameter": "year"}).text)
+        mileage_km = int(tag_element_content.find(
+            "dd", {"data-parameter": "mileage"}).text[:-2].replace(" ", ""))
+        fuel_type = tag_element_content.find(
+            "dd", {"data-parameter": "fuel_type"}).text
+        price_pln = int(tag_element_content.find(
+            "h3").text.replace(" ", ""))
+        img_url = tag_element_content.find(
+            "img", class_="e17vhtca4 ooa-2zzg2s").get('src')
+        points: int = self.convert_attrs_to_score(year, mileage_km, price_pln)
+
+        return {
+            "link": link,
+            "full_name": full_name,
+            "desc": description,
+            "year": int(year),
+            "mileage_km": mileage_km,
+            "fuel_type": fuel_type,
+            "price_pln": price_pln,
+            "image_url": img_url,
+            "score": points,
+        }
+
+    def convert_attrs_to_score(self, year: int, mileage: int, price: int):
+        score = 0
+        score += (10*(datetime.datetime.now().year - year) /
+                  (self.attributes["min_year"]-datetime.datetime.now().year) + 10)*2
+        score += (-10*mileage /
+                  (self.attributes["max_odometer"]) + 10)*0.2
+        score += (-10*price /
+                  (self.attributes["max_price"]) + 10)*1.5
+        return score
 
     def scrape_pages(self, number_of_pages: int) -> List[Car]:
         cars = []
@@ -104,80 +219,7 @@ class OtomotoScraper:
             if not "sprzedawca" in car.text:
                 is_listing = False
             try:
-                link = car.find(
-                    "h1").find('a', href=True).get('href')
-                print("a")
-                full_name = car.find(
-                    "h1").find('a', href=True).text
-                print("b")
-                description = car.find(
-                    "p", class_="emjt7sh10 ooa-1tku07r er34gjf0").text
-                year = car.find("dd", {"data-parameter": "year"}).text
-                mileage_km = car.find("dd", {"data-parameter": "mileage"}).text
-                fuel_type = car.find(
-                    "dd", {"data-parameter": "fuel_type"}).text
-                price_pln = car.find(
-                    "h3").text
-                points: int = 0
-                helpyear = int(year)
-                currentDateTime = datetime.datetime.now()
-                current_year = currentDateTime.date().year
-                if ((current_year-helpyear) <= 3):
-                    points += 5
-                elif ((current_year-helpyear) <= 5):
-                    points += 4
-                elif ((current_year-helpyear) <= 6):
-                    points += 3
-                elif ((current_year-helpyear) <= 10):
-                    points += 2
-                elif ((current_year-helpyear) <= 12):
-                    points += 1
-                helpmileage_km: int = int(mileage_km[:-2].replace(" ", ""))
-                if (helpmileage_km <= 50000):
-                    points += 5
-                elif (helpmileage_km <= 60, 000):
-                    points += 4
-                elif (helpmileage_km <= 80, 000):
-                    points += 3
-                elif (helpmileage_km <= 100, 000):
-                    points += 2
-                elif (helpmileage_km <= 150, 000):
-                    points += 2
-
-                helpprice: int = int(price_pln[:-3].replace(" ", ""))
-                if (price_pln[-2] != 'U'):
-                    if (helpprice <= 30, 000):
-                        points += 5
-                    elif (helpprice <= 40, 000):
-                        points += 4
-                    elif (helpprice <= 45, 000):
-                        points += 3
-                    elif (helpprice <= 50, 000):
-                        points += 2
-                    elif (helpprice <= 60, 000):
-                        points += 1
-                if (points > 10):
-                    global_car_list.append(Car(
-                        link=link,
-                        full_name=full_name,
-                        description=description,
-                        year=int(year),
-                        mileage_km=mileage_km,
-                        fuel_type=fuel_type,
-                        price_pln=int(price_pln.replace(" ", "")),
-                        Raiting=points
-                    ))
-
-                list_of_cars.append(Car(
-                    link=link,
-                    full_name=full_name,
-                    description=description,
-                    year=int(year),
-                    mileage_km=mileage_km,
-                    fuel_type=fuel_type,
-                    price_pln=int(price_pln.replace(" ", "")),
-                    Raiting=points
-                ))
+                pass
             except Exception as e:
                 print(car)
                 print(f"Failed to gather car{e}")
@@ -232,8 +274,12 @@ class MyClient(discord.Client):
     @tasks.loop(seconds=10)
     async def send_message(self):
         channel = self.get_channel(get_channel())  # channel ID goes here
-        cars, best_car = scrape_otomoto()
-        await channel.send(best_car)
+        await channel.typing()
+        cars = OtomotoScraper().autoscraper(10)
+        await channel.send("**Nowy ranking aut**")
+        await channel.send(embed=cars[0].create_embed())
+        await channel.send(embed=cars[1].create_embed())
+        await channel.send(embed=cars[2].create_embed())
 
 
 if __name__ == "__main__":
